@@ -24,7 +24,7 @@ import {
   Save
 } from 'lucide-react';
 
-const ai = new GoogleGenAI({ apiKey: import.meta.env.VITE_GEMINI_API_KEY || '' });
+const ai = new GoogleGenAI({ apiKey: (import.meta as any).env.VITE_GEMINI_API_KEY || '' });
 
 interface Subtask {
   id: number;
@@ -86,8 +86,37 @@ export default function App() {
   
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  // helpers for localStorage persistence
+  const loadNotesFromStorage = (): Note[] => {
+    try {
+      return JSON.parse(localStorage.getItem('notes') || '[]');
+    } catch { return [] as Note[]; }
+  };
+  const saveNotesToStorage = (ns: Note[]) => {
+    localStorage.setItem('notes', JSON.stringify(ns));
+  };
+  const loadGoalsFromStorage = (): Goal[] => {
+    try { return JSON.parse(localStorage.getItem('goals') || '[]'); } catch { return [] as Goal[]; }
+  };
+  const saveGoalsToStorage = (gs: Goal[]) => {
+    localStorage.setItem('goals', JSON.stringify(gs));
+  };
+  const loadStatsFromStorage = (): UserStats => {
+    try { return JSON.parse(localStorage.getItem('stats') || '{"xp":0,"level":1}'); } catch { return { xp: 0, level: 1 }; }
+  };
+  const saveStatsToStorage = (s: UserStats) => {
+    localStorage.setItem('stats', JSON.stringify(s));
+  };
+
+  const loadData = () => {
+    setNotes(loadNotesFromStorage());
+    setGoals(loadGoalsFromStorage());
+    setStats(loadStatsFromStorage());
+    setIsLoading(false);
+  };
+
   useEffect(() => {
-    fetchData();
+    loadData();
     const savedTheme = localStorage.getItem('theme');
     if (savedTheme === 'dark') setIsDarkMode(true);
   }, []);
@@ -102,147 +131,107 @@ export default function App() {
     }
   }, [isDarkMode]);
 
-  const fetchData = async () => {
-    setIsLoading(true);
-    try {
-      const [notesRes, goalsRes, statsRes] = await Promise.all([
-        fetch('/api/notes'),
-        fetch('/api/goals'),
-        fetch('/api/stats')
-      ]);
+  // note: fetchData is no longer needed – everything lives in localStorage
 
-      if (!notesRes.ok || !goalsRes.ok || !statsRes.ok) {
-        throw new Error('Failed to fetch data from server');
+  const addXp = (amount: number) => {
+    setStats(prev => {
+      let newXp = prev.xp + amount;
+      let newLevel = prev.level;
+      while (newXp >= 100) {
+        newXp -= 100;
+        newLevel += 1;
       }
-
-      const notesData = await notesRes.json();
-      const goalsData = await goalsRes.json();
-      const statsData = await statsRes.json();
-      setNotes(notesData);
-      setGoals(goalsData);
-      setStats(statsData);
-    } catch (error) {
-      console.error('Failed to fetch data:', error);
-    } finally {
-      setIsLoading(false);
-    }
+      const updated: UserStats = { xp: newXp, level: newLevel };
+      saveStatsToStorage(updated);
+      return updated;
+    });
   };
 
-  const addXp = async (amount: number) => {
-    try {
-      const res = await fetch('/api/stats/add-xp', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ amount })
-      });
-      const newStats = await res.json();
-      setStats(newStats);
-    } catch (error) {
-      console.error('Failed to add XP:', error);
-    }
-  };
-
-  const addNote = async (e: FormEvent) => {
+  const addNote = (e: FormEvent) => {
     e.preventDefault();
     if (!newNote.trim()) return;
 
-    try {
-      const res = await fetch('/api/notes', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ content: newNote })
-      });
-      if (res.ok) {
-        setNewNote('');
-        addXp(5);
-        fetchData();
-      }
-    } catch (error) {
-      console.error('Failed to add note:', error);
-    }
+    const note: Note = {
+      id: Date.now(),
+      content: newNote,
+      created_at: new Date().toISOString()
+    };
+    const updated = [note, ...notes];
+    saveNotesToStorage(updated);
+    setNotes(updated);
+    setNewNote('');
+    addXp(5);
   };
 
-  const deleteNote = async (id: number) => {
-    try {
-      await fetch(`/api/notes/${id}`, { method: 'DELETE' });
-      fetchData();
-    } catch (error) {
-      console.error('Failed to delete note:', error);
-    }
+  const deleteNote = (id: number) => {
+    const updated = notes.filter(n => n.id !== id);
+    saveNotesToStorage(updated);
+    setNotes(updated);
   };
 
-  const addGoal = async (e: FormEvent) => {
+  const addGoal = (e: FormEvent) => {
     e.preventDefault();
     if (!newGoalTitle.trim()) return;
 
-    try {
-      const res = await fetch('/api/goals', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
-          title: newGoalTitle, 
-          description: newGoalDesc,
-          color: newGoalColor
-        })
+    const goal: Goal = {
+      id: Date.now(),
+      title: newGoalTitle,
+      description: newGoalDesc,
+      status: 'pending',
+      color: newGoalColor,
+      created_at: new Date().toISOString(),
+      subtasks: []
+    };
+    const updated = [goal, ...goals];
+    saveGoalsToStorage(updated);
+    setGoals(updated);
+    setNewGoalTitle('');
+    setNewGoalDesc('');
+    addXp(10);
+  };
+
+  const updateGoal = (id: number, updates: Partial<Goal>) => {
+    setGoals(prev => {
+      const updated = prev.map(g => (g.id === id ? { ...g, ...updates } : g));
+      saveGoalsToStorage(updated);
+      return updated;
+    });
+    if (updates.status === 'completed') addXp(50);
+    setEditingGoal(null);
+  };
+
+  const deleteGoal = (id: number) => {
+    const updated = goals.filter(g => g.id !== id);
+    saveGoalsToStorage(updated);
+    setGoals(updated);
+  };
+
+  const toggleSubtask = (sub: Subtask) => {
+    setGoals(prev => {
+      const updated = prev.map(goal => {
+        if (goal.subtasks.some(s => s.id === sub.id)) {
+          const newSubs = goal.subtasks.map(s =>
+            s.id === sub.id ? { ...s, completed: s.completed ? 0 : 1 } : s
+          );
+          if (!sub.completed) addXp(10);
+          return { ...goal, subtasks: newSubs };
+        }
+        return goal;
       });
-      if (res.ok) {
-        setNewGoalTitle('');
-        setNewGoalDesc('');
-        addXp(10);
-        fetchData();
-      }
-    } catch (error) {
-      console.error('Failed to add goal:', error);
-    }
+      saveGoalsToStorage(updated);
+      return updated;
+    });
   };
 
-  const updateGoal = async (id: number, updates: Partial<Goal>) => {
-    try {
-      const res = await fetch(`/api/goals/${id}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(updates)
-      });
-      if (res.ok) {
-        if (updates.status === 'completed') addXp(50);
-        fetchData();
-        setEditingGoal(null);
-      }
-    } catch (error) {
-      console.error('Failed to update goal:', error);
-    }
-  };
-
-  const deleteGoal = async (id: number) => {
-    try {
-      await fetch(`/api/goals/${id}`, { method: 'DELETE' });
-      fetchData();
-    } catch (error) {
-      console.error('Failed to delete goal:', error);
-    }
-  };
-
-  const toggleSubtask = async (subtask: Subtask) => {
-    try {
-      await fetch(`/api/subtasks/${subtask.id}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ completed: !subtask.completed })
-      });
-      if (!subtask.completed) addXp(10);
-      fetchData();
-    } catch (error) {
-      console.error('Failed to toggle subtask:', error);
-    }
-  };
-
-  const deleteSubtask = async (id: number) => {
-    try {
-      await fetch(`/api/subtasks/${id}`, { method: 'DELETE' });
-      fetchData();
-    } catch (error) {
-      console.error('Failed to delete subtask:', error);
-    }
+  const deleteSubtask = (id: number) => {
+    setGoals(prev => {
+      const updated = prev.map(goal => ({
+        ...goal,
+        subtasks: goal.subtasks.filter(s => s.id !== id)
+      }));
+      saveGoalsToStorage(updated);
+      return updated;
+    });
   };
 
   const breakdownGoal = async (goal: Goal) => {
@@ -264,17 +253,21 @@ export default function App() {
       });
 
       const subtasks: string[] = JSON.parse(response.text || "[]");
-      
-      for (const title of subtasks) {
-        await fetch(`/api/goals/${goal.id}/subtasks`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ title, color: goal.color })
+      setGoals(prev => {
+        const updated = prev.map(g => {
+          if (g.id === goal.id) {
+            const newSubs = [...g.subtasks];
+            for (const title of subtasks) {
+              newSubs.push({ id: Date.now() + Math.random(), title, completed: 0, color: g.color });
+            }
+            return { ...g, subtasks: newSubs };
+          }
+          return g;
         });
-      }
-      
+        saveGoalsToStorage(updated);
+        return updated;
+      });
       addXp(20);
-      fetchData();
     } catch (error) {
       console.error('AI Breakdown failed:', error);
     } finally {
@@ -282,58 +275,47 @@ export default function App() {
     }
   };
 
-  const addManualSubtask = async (goalId: number) => {
+  const addManualSubtask = (goalId: number) => {
     const title = newSubtaskTitle[goalId];
     if (!title?.trim()) return;
-
-    try {
-      const goal = goals.find(g => g.id === goalId);
-      await fetch(`/api/goals/${goalId}/subtasks`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ title, color: goal?.color || PRESET_COLORS[0] })
+    const color = goals.find(g => g.id === goalId)?.color || PRESET_COLORS[0];
+    setGoals(prev => {
+      const updated = prev.map(g => {
+        if (g.id === goalId) {
+          const newSubs = [...g.subtasks, { id: Date.now(), title, completed: 0, color }];
+          return { ...g, subtasks: newSubs };
+        }
+        return g;
       });
-      setNewSubtaskTitle(prev => ({ ...prev, [goalId]: '' }));
-      addXp(5);
-      fetchData();
-    } catch (error) {
-      console.error('Failed to add subtask:', error);
-    }
+      saveGoalsToStorage(updated);
+      return updated;
+    });
+    setNewSubtaskTitle(prev => ({ ...prev, [goalId]: '' }));
+    addXp(5);
   };
 
-  const exportData = async () => {
-    try {
-      const res = await fetch('/api/export');
-      const data = await res.json();
-      const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `questlog-backup-${new Date().toISOString().split('T')[0]}.json`;
-      a.click();
-      URL.revokeObjectURL(url);
-    } catch (error) {
-      console.error('Export failed:', error);
-    }
+  const exportData = () => {
+    const data = { notes, goals, stats };
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `questlog-backup-${new Date().toISOString().split('T')[0]}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
   };
 
-  const importData = async (e: ChangeEvent<HTMLInputElement>) => {
+  const importData = (e: ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
-
     const reader = new FileReader();
-    reader.onload = async (event) => {
+    reader.onload = (event) => {
       try {
         const data = JSON.parse(event.target?.result as string);
-        const res = await fetch('/api/import', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(data)
-        });
-        if (res.ok) {
-          fetchData();
-          alert('Data imported successfully!');
-        }
+        if (data.notes) { setNotes(data.notes); saveNotesToStorage(data.notes); }
+        if (data.goals) { setGoals(data.goals); saveGoalsToStorage(data.goals); }
+        if (data.stats) { setStats(data.stats); saveStatsToStorage(data.stats); }
+        alert('Data imported successfully!');
       } catch (error) {
         console.error('Import failed:', error);
         alert('Invalid backup file.');
