@@ -11,7 +11,6 @@ import {
   Target,
   AlertCircle,
   Sparkles,
-  Trophy,
   ChevronDown,
   ChevronUp,
   Check,
@@ -354,10 +353,6 @@ export default function App() {
             >
               {isDarkMode ? <Sun size={20} /> : <Moon size={20} />}
             </button>
-            <div className="flex items-center gap-2 text-stone-400">
-              <Trophy size={18} className={stats.level > 1 ? 'text-amber-500' : ''} />
-              <span className="text-sm font-medium hidden sm:inline"></span>
-            </div>
           </div>
         </div>
       </div>
